@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Proxy Admin</title>
+  <link rel="stylesheet" href="/admin.style">
+</head>
+<body>
+<div class="box">
+  <h2>QUẢN LÝ API</h2>
+  <form method="POST" action="/__admin/add">
+    <input name="name" placeholder="Tên API (key)">
+    <input name="target" placeholder="URL đích https://...">
+    <button>Thêm API</button>
+  </form>
+
+  <h3>Danh sách API</h3>
+  <pre id="list">Đang tải...</pre>
+
+  <a href="/__admin/logs">Xem logs</a>
+</div>
+<script>
+fetch("/__admin/list", {credentials:"include"})
+.then(r=>r.json())
+.then(x=>{
+  document.getElementById("list").innerText = JSON.stringify(x,null,2)
+});
+</script>
+</body>
+</html>
