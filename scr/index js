@@ -1,0 +1,112 @@
+const ADMIN_PATH = "/__admin";
+
+function unauthorized() {
+  return new Response("Unauthorized", {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Basic realm="Admin"' }
+  });
+}
+
+function parseBasicAuth(h) {
+  if (!h || !h.startsWith("Basic ")) return null;
+  const txt = atob(h.slice(6));
+  const [u,p] = txt.split(":");
+  return {u,p};
+}
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    const path = url.pathname;
+
+    // ---- Serve static
+    if (path === "/admin.style") {
+      return new Response(await env.ASSETS.get("style.css"), {
+        headers: {"Content-Type":"text/css"}
+      });
+    }
+
+    if (path === ADMIN_PATH) {
+      const auth = parseBasicAuth(req.headers.get("Authorization"));
+      const pass = await env.SECRETS.get("ADMIN_PASS");
+      if (!auth || auth.u !== "admin" || auth.p !== pass) return unauthorized();
+
+      return new Response(await env.ASSETS.get("admin.html"), {
+        headers: {"Content-Type":"text/html"}
+      });
+    }
+
+    if (path === `${ADMIN_PATH}/list`) {
+      const auth = parseBasicAuth(req.headers.get("Authorization"));
+      const pass = await env.SECRETS.get("ADMIN_PASS");
+      if (!auth || auth.u !== "admin" || auth.p !== pass) return unauthorized();
+
+      const j = JSON.parse(await env.API_DB.get("apis") || "{}");
+      return Response.json(j);
+    }
+
+    if (path === `${ADMIN_PATH}/add` && req.method === "POST") {
+      const auth = parseBasicAuth(req.headers.get("Authorization"));
+      const pass = await env.SECRETS.get("ADMIN_PASS");
+      if (!auth || auth.u !== "admin" || auth.p !== pass) return unauthorized();
+
+      const fd = await req.formData();
+      const name = fd.get("name");
+      const target = fd.get("target");
+
+      const apis = JSON.parse(await env.API_DB.get("apis") || "{}");
+      apis[name] = target;
+
+      await env.API_DB.put("apis", JSON.stringify(apis));
+      return Response.redirect(ADMIN_PATH, 302);
+    }
+
+    if (path === `${ADMIN_PATH}/logs`) {
+      const auth = parseBasicAuth(req.headers.get("Authorization"));
+      const pass = await env.SECRETS.get("ADMIN_PASS");
+      if (!auth || auth.u !== "admin" || auth.p !== pass) return unauthorized();
+
+      let out = [];
+      for await (const k of env.LOG_DB.list({limit:50})) {
+        out.push(JSON.parse(await env.LOG_DB.get(k.name)));
+      }
+      return new Response(`<pre>${JSON.stringify(out,null,2)}</pre>`, {
+        headers: {"Content-Type":"text/html"}
+      });
+    }
+
+    // ---- PROXY
+    if (path === "/proxy") {
+      const master = await env.SECRETS.get("MASTER_TOKEN");
+      if (master && req.headers.get("X-API-KEY") !== master)
+        return new Response("Forbidden", { status: 403 });
+
+      const api = url.searchParams.get("api");
+      const direct = url.searchParams.get("url");
+
+      const apis = JSON.parse(await env.API_DB.get("apis") || "{}");
+      const target = apis[api] || direct;
+      if (!target)
+        return new Response("Missing ?api= hoặc ?url=", {status:400});
+
+      await env.LOG_DB.put(Date.now()+"", JSON.stringify({
+        time: new Date().toISOString(),
+        target,
+        ip: req.headers.get("CF-Connecting-IP")
+      }));
+
+      const resp = await fetch(target, req);
+      const h = new Headers(resp.headers);
+      h.set("Access-Control-Allow-Origin","*");
+      h.set("Access-Control-Allow-Methods","GET,POST,OPTIONS");
+      h.set("Access-Control-Allow-Headers","*");
+
+      return new Response(await resp.arrayBuffer(), {
+        status: resp.status,
+        headers: h
+      });
+    }
+
+    return new Response("Not found", {status:404});
+  }
+}
